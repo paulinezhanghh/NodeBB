@@ -147,46 +147,49 @@ module.exports = function (middleware) {
 		return null;
 	}
 
-	async function loadClientHeaderFooterData(req, res, options) {
-		const registrationType = meta.config.registrationType || 'normal';
-		res.locals.config = res.locals.config || {};
-		const templateValues = {
-			title: meta.config.title || '',
-			'title:url': meta.config['title:url'] || '',
-			description: meta.config.description || '',
-			'cache-buster': meta.config['cache-buster'] || '',
-			'brand:logo': meta.config['brand:logo'] || '',
-			'brand:logo:url': meta.config['brand:logo:url'] || '',
-			'brand:logo:alt': meta.config['brand:logo:alt'] || '',
-			'brand:logo:display': meta.config['brand:logo'] ? '' : 'hide',
+	function initializeTemplateValues(metaConfig, resLocalsConfig, registrationType, options){
+		return{
+			title: metaConfig.title || '',
+			'title:url': metaConfig['title:url'] || '',
+			description: metaConfig.description || '',
+			'cache-buster': metaConfig['cache-buster'] || '',
+			'brand:logo': metaConfig['brand:logo'] || '',
+			'brand:logo:url': metaConfig['brand:logo:url'] || '',
+			'brand:logo:alt': metaConfig['brand:logo:alt'] || '',
+			'brand:logo:display': metaConfig['brand:logo'] ? '' : 'hide',
 			allowRegistration: registrationType === 'normal',
 			searchEnabled: plugins.hooks.hasListeners('filter:search.query'),
-			postQueueEnabled: !!meta.config.postQueue,
-			registrationQueueEnabled: meta.config.registrationApprovalType !== 'normal' || (meta.config.registrationType === 'invite-only' || meta.config.registrationType === 'admin-invite-only'),
-			config: res.locals.config,
+			postQueueEnabled: !!metaConfig.postQueue,
+			registrationQueueEnabled: metaConfig.registrationApprovalType !== 'normal' 
+				|| ['invite-only', 'admin-invite-only'].includes(registrationType),
+			config: resLocalsConfig,
 			relative_path,
 			bodyClass: options.bodyClass,
 			widgets: options.widgets,
-		};
+			configJSON: jsesc(JSON.stringify(resLocalsConfig), { isScriptContext: true })
+		}
+	}
 
-		templateValues.configJSON = jsesc(JSON.stringify(res.locals.config), { isScriptContext: true });
-
-		const title = translator.unescape(utils.stripHTMLTags(options.title || ''));
-		const results = await utils.promiseParallel({
-			isAdmin: user.isAdministrator(req.uid),
-			isGlobalMod: user.isGlobalModerator(req.uid),
-			isModerator: user.isModeratorOfAnyCategory(req.uid),
-			privileges: privileges.global.get(req.uid),
-			blocks: user.blocks.list(req.uid),
-			user: user.getUserData(req.uid),
-			isEmailConfirmSent: req.uid <= 0 ? false : await user.email.isValidationPending(req.uid),
-			languageDirection: translator.translate('[[language:dir]]', res.locals.config.userLang),
-			timeagoCode: languages.userTimeagoCode(res.locals.config.userLang),
-			browserTitle: translator.translate(controllersHelpers.buildTitle(title)),
-			navigation: navigation.get(req.uid),
-			roomIds: req.uid > 0 ? db.getSortedSetRevRange(`uid:${req.uid}:chat:rooms`, 0, 0) : [],
+	async function fetchUserData(reqUid, optionsTitle, userLang) {
+		const title = utils.stripHTMLTags(optionsTitle || '');
+		
+		return await utils.promiseParallel({
+			isAdmin: user.isAdministrator(reqUid),
+			isGlobalMod: user.isGlobalModerator(reqUid),
+			isModerator: user.isModeratorOfAnyCategory(reqUid),
+			privileges: privileges.global.get(reqUid),
+			blocks: user.blocks.list(reqUid),
+			user: user.getUserData(reqUid),
+			isEmailConfirmSent: reqUid <= 0 ? false : await user.email.isValidationPending(reqUid),
+			languageDirection: translator.translate('[[language:dir]]', userLang),
+			timeagoCode: languages.userTimeagoCode(userLang),
+			browserTitle: translator.translate(controllersHelpers.buildTitle(translator.unescape(title))),
+			navigation: navigation.get(reqUid),
+			roomIds: reqUid > 0 ? db.getSortedSetRevRange(`uid:${reqUid}:chat:rooms`, 0, 0) : []
 		});
+	}
 
+	function assignToTemplate(results, templateValues){
 		const unreadData = {
 			'': {},
 			new: {},
@@ -210,19 +213,6 @@ module.exports = function (middleware) {
 
 		templateValues.bootswatchSkin = res.locals.config.bootswatchSkin || '';
 		templateValues.browserTitle = results.browserTitle;
-		({
-			navigation: templateValues.navigation,
-			unreadCount: templateValues.unreadCount,
-		} = await appendUnreadCounts({
-			uid: req.uid,
-			query: req.query,
-			navigation: results.navigation,
-			unreadData,
-		}));
-		templateValues.isAdmin = results.user.isAdmin;
-		templateValues.isGlobalMod = results.user.isGlobalMod;
-		templateValues.showModMenu = results.user.isAdmin || results.user.isGlobalMod || results.user.isMod;
-		templateValues.canChat = (results.privileges.chat || results.privileges['chat:privileged']) && meta.config.disableChat !== 1;
 		templateValues.user = results.user;
 		templateValues.userJSON = jsesc(JSON.stringify(results.user), { isScriptContext: true });
 		templateValues.useCustomCSS = meta.config.useCustomCSS && meta.config.customCSS;
@@ -233,12 +223,15 @@ module.exports = function (middleware) {
 		templateValues.defaultLang = meta.config.defaultLang || 'en-GB';
 		templateValues.userLang = res.locals.config.userLang;
 		templateValues.languageDirection = results.languageDirection;
+	}
+
+	function handleConditionalTemplateAssignments(req, templateValues, options, resLocals) {
 		if (req.query.noScriptMessage) {
 			templateValues.noScriptMessage = validator.escape(String(req.query.noScriptMessage));
 		}
 
-		templateValues.template = { name: res.locals.template };
-		templateValues.template[res.locals.template] = true;
+		templateValues.template = { name: resLocals.template };
+		templateValues.template[resLocals.template] = true;
 
 		if (options.hasOwnProperty('_header')) {
 			templateValues.metaTags = options._header.tags.meta;
@@ -248,6 +241,34 @@ module.exports = function (middleware) {
 		if (req.route && req.route.path === '/') {
 			modifyTitle(templateValues);
 		}
+	}
+
+	async function loadClientHeaderFooterData(req, res, options) {
+		const registrationType = meta.config.registrationType || 'normal';
+		res.locals.config = res.locals.config || {};
+		const templateValues = initializeTemplateValues(meta.config, res.locals.config, registrationType, options);
+		
+		const results = await fetchUserData(req.uid, options.title, res.locals.config.userLang);
+
+		assignToTemplate(results, templateValues)
+		await appendUnreadCounts({
+			uid: req.uid,
+			query: req.query,
+			navigation: results.navigation,
+			unreadData: results.user.unreadData
+		}).then(({ navigation, unreadCount }) => {
+			Object.assign(templateValues, {
+				navigation,
+				unreadCount,
+				isAdmin: results.user.isAdmin,
+				isGlobalMod: results.user.isGlobalMod,
+				showModMenu: results.user.isAdmin || results.user.isGlobalMod || results.user.isMod,
+				canChat: (results.privileges.chat || results.privileges['chat:privileged']) && meta.config.disableChat !== 1
+			});
+		});
+	
+		handleConditionalTemplateAssignments(req, templateValues, options, res.locals);
+		
 		return templateValues;
 	}
 
