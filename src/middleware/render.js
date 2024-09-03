@@ -189,7 +189,7 @@ module.exports = function (middleware) {
 		});
 	}
 
-	function assignToTemplate(results, templateValues){
+	function assignToTemplate(results, templateValues,res){
 		const unreadData = {
 			'': {},
 			new: {},
@@ -250,7 +250,7 @@ module.exports = function (middleware) {
 		
 		const results = await fetchUserData(req.uid, options.title, res.locals.config.userLang);
 
-		assignToTemplate(results, templateValues)
+		assignToTemplate(results, templateValues,res)
 		await appendUnreadCounts({
 			uid: req.uid,
 			query: req.query,
