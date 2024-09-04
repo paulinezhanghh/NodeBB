@@ -242,6 +242,7 @@ module.exports = function (middleware) {
 		}
 	}
 
+	console.log('ruoxi Z1');
 	async function loadClientHeaderFooterData(req, res, options) {
 		const registrationType = meta.config.registrationType || 'normal';
 		res.locals.config = res.locals.config || {};
@@ -264,8 +265,10 @@ module.exports = function (middleware) {
 			});
 		});
 		handleConditionalTemplateAssignments(req, templateValues, options, res.locals);
+		console.log('ruoxi Z2');
 		return templateValues;
 	}
+	console.log('ruoxi Z3');
 
 	async function loadAdminHeaderFooterData(req, res, options) {
 		const custom_header = {
